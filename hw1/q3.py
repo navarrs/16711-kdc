@@ -7,6 +7,8 @@ from scipy import linalg
 
 np.set_printoptions(4, suppress=True)
 
+from utils import EstimatePlane, RANSAC
+
 # ------------------------------------------------------------------------------
 # Load data
 
@@ -50,12 +52,12 @@ def compute_twists(qw_matrix):
 
 
 def skew(w):
-    return np.array([[0,  w[2], -w[1]],
-                     [-w[2],     0, w[0]],
-                     [w[1], -w[0],   0]], dtype=np.float)
+    return np.array([[0,  -w[2], w[1]],
+                     [w[2],  0, -w[0]],
+                     [-w[1], w[0], 0]], dtype=np.float)
 
 
-def compute_matrix_exponential_w(w_hat, theta):
+def rodrigues(w_hat, theta):
     return (
         np.identity(3) 
         + w_hat * np.sin(theta) 
@@ -72,39 +74,18 @@ def compute_matrix_exponential_xi(twist, w_hat, theta):
     w = twist[3:]
 
     # compute the rotation part
-    R = compute_matrix_exponential_w(w_hat, theta)
+    R = rodrigues(w_hat, theta)
     exp_xi[:3, :3] = R
 
     # compute the translation part
     # (I - exp_w) (wxv) + wwtvtheta = (I - exp_w) wxv
     w_x_v = np.cross(w, v)
-    t = (I - R) @ w_x_v
+    t = (I - R) @ w_x_v + w * np.dot(w, v) * theta
     exp_xi[:3, -1] = t
     return exp_xi
 
 # ------------------------------------------------------------------------------
 # Main Program
-
-def find_normal(A, b):
-    m = A.shape[0]
-    n = A.shape[1]
-    U, s, V_T = linalg.svd(A)
-    S = linalg.diagsvd(s, m, n)
-    
-    k = np.linalg.matrix_rank(S)
-    U_T = np.transpose(U)
-    
-    S_inv = S
-    for i in range(k):
-        S_inv[i, i] = 1 / S_inv[i, i]
-    
-    S_inv = S_inv.transpose()
-    V = np.transpose(V_T)
-
-    # x = V 1/S U_T b
-    x = np.dot(np.matmul(np.matmul(V, S_inv), U_T), b)
-    return x
-    
 
 def main():
     twists = compute_twists(qw)
@@ -133,18 +114,12 @@ def main():
 
         # Get tool coordinate 
         coords[j] = G_world_tool[:3, -1]
-        
-    # Find normal vector
-    # A = np.ones(shape=coords.shape, dtype=np.float)
-    # A[:, 0] = coords[:, 0]
-    # A[:, 1] = coords[:, 1]
-    # b = coords[:, 2]
-    # n = find_normal(A, b)
-    # print(f"Plane normal: {n}")
     
+    n, _, _ = RANSAC(coords)
+    print(f"Normal: {n}")
 
     # Save tool trajectory
-    np.savetxt("marker_coords.txt", coords, fmt="%10.5f", delimiter=' ')
+    np.savetxt("data/marker_coords.txt", coords, fmt="%10.5f", delimiter=' ')
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
     ax.plot3D(coords[:, 0], coords[:, 1], coords[:, 2])
@@ -152,7 +127,7 @@ def main():
     ax.set_ylabel("y")
     ax.set_zlabel("z")
     ax.set_title("robot_drawing")
-    plt.savefig("marker_drawing.png")
+    plt.savefig("data/marker_drawing.png")
     plt.show()
 
 
