@@ -2,6 +2,7 @@ from utils import (
     Twist,
     Jacobian,
     JacobianPInv,
+    JacobianInv,
     FK
 )
 import matplotlib.pyplot as plt
@@ -52,24 +53,26 @@ class IKSolver(object):
         twists,
         FK,
         Jacobian,
-        JacobianPInv,
+        JacobianInv,
+        method = "pinv",
         K=[1, 1],
-        dt=0.002,
-        err_thresh=1e-3,
+        dt=0.001,
+        err_thresh=1e-2,
         max_iter=5000,
-        log_step=100
+        log_step=500
     ):
         self.g_ssh = g_ssh
         self.g_sht = g_sht
         self.twists = twists
         self.FK = FK
         self.Jacobian = Jacobian
-        self.JacobianPInv = JacobianPInv
+        self.JacobianInv = JacobianInv
         self.K = K
         self.dt = dt
         self.err_thresh = err_thresh
         self.max_iter = max_iter
         self.log_step = log_step
+        self.method = method
 
         self.Q = []
 
@@ -81,51 +84,55 @@ class IKSolver(object):
         """
         e = np.zeros(shape=(6,), dtype=np.float)
         e[:3] = pd - ps
-        e[3:] = (qd * qs.inverse).imaginary
+        # print(e[:3], np.linalg.norm(e[:3]))
+        dq = (qd * qs.inverse)
+        # e[3:] = dq.w * dq.imaginary
+        e[3:] = dq.imaginary
+        # print(e[3:], np.linalg.norm(e[3:]))
         return e, np.linalg.norm(e, ord=2)
 
     def UpdatePose(self, q):
         g = self.g_ssh @ self.FK(self.twists, q, self.g_sht)
         t = g[:3, -1]
         R = g[:3, :3]
-        quat = Quaternion(matrix=R)
+        quat = Quaternion(matrix=R).unit
         return t, quat
 
-    def Solve(self, J, x_d, q0):
+    def Solve(self, x_d, q0, lamb = 0.0):
         itr = 0
         pd = x_d[:3]
         quatd = Quaternion(x_d[-1], x_d[3], x_d[4], x_d[5])
-        enorm = 10000
+        norm_error = 10000
         
-        self.Q = []
-        self.Q.append(q0)
-
-        while enorm > self.err_thresh and itr < self.max_iter:
+        self.Q = [q0]
+        while norm_error > self.err_thresh and itr < self.max_iter:
             # compute new pose
             ps, quats = self.UpdatePose(self.Q[itr])
-            v, enorm = self.PoseError(pd, quatd, ps, quats)
+            v, norm_error = self.PoseError(pd, quatd, ps, quats)
 
+            if itr % self.log_step == 0 or itr == self.max_iter - 1:
+                print(f"[{itr}/{self.max_iter}]\n\tpose error: {norm_error}")
+                print(f"\ttranslation: {np.linalg.norm(v[:3])}")
+                print(f"\trotation: {np.linalg.norm(v[3:])}")
+                print(f"\tcurrent pose: {ps}, {quats}")
+                print(f"\tgoal pose: {pd}, {quatd}")
+                
             # v = ek
             v[:3] *= self.K[0]
-            v[3:] *= self.K[1]
+            v[3:] *= self.K[1] 
 
-            # jacobian pseudo inverse
-            J_pinv = self.JacobianPInv(J)
-
-            # q_dot = J_pinv @ v
+            # jacobian
+            J = self.Jacobian(self.twists, self.Q[itr])
+            
+            J_pinv = self.JacobianInv(J, lamb) # if 0 then its the moore-penrose
             q_dot = J_pinv @ v
+                
 
             # get new q
             q = self.Q[itr] + q_dot * self.dt
             self.Q.append(q)
-
-            # compute new J
-            J = self.Jacobian(self.twists, q)
-
-            itr += 1
-
-            if itr % self.log_step == 0:
-                print(f"[{itr}/{self.max_iter}] pose error: {enorm}")
+            
+            itr += 1    
 
     def Save(self, outdir="data/trajectory.txt"):
         np.savetxt(outdir, np.asarray(self.Q), fmt="%10.5f", delimiter=' ')
@@ -160,37 +167,23 @@ def main():
     J = Jacobian(twists, joint_data)
     print(f"Q3.1 Jacobian:\n{J}")
 
-    # q3.2
-    # x_s = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
-    # ps = x_s[:3]
-    # qs = Quaternion(x_s[-1], x_s[3], x_s[4], x_s[5])
-
-    # x_d1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
-    # pd = x_d1[:3]
-    # qd = Quaternion(x_d1[-1], x_d1[3], x_d1[4], x_d1[5])
-
-    # et = pd - ps
-    # eo = qd * qs.inverse
-    # print(
-    #     f"Q3.2 Pose error: \n\ttranslation{et} \n\torientation {eo.imaginary}")
-
-    # theta = 2 * math.acos(eo.w)
-    # w = eo.imaginary / math.sin(theta/2)
-    # v = np.zeros(shape=(6,), dtype=np.float)
-    # v[:3] = -np.cross(w, et)
-    # v[3:] = w
-    # print(f"Q3.2 velocity: {v}")
-
     # q3.3 Jacobian pseudoinverse
-    g = FK(twists, joint_data, g_sht)
     g_ssh = g_sb @ g_bsh
-    print(f"g_s:\n{g_ssh @ g}")
+    g = g_ssh @ FK(twists, joint_data, g_sht)
+    print(f"g_s:\n{g}")
 
-    IK = IKSolver(g_ssh, g_sht, twists, FK, Jacobian, JacobianPInv)
-    IK.Solve(J, x_d1, joint_data)
-    IK.Save("data/traj_xd1.txt")
-
-    # joint_trajectory = IKPInv(J, twists, v, theta, g_st, x_s, x_d1)
+    x_d1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
+    IK = IKSolver(g_ssh, g_sht, twists, FK, Jacobian, JacobianInv)
+    # IK.Solve(x_d1, joint_data)
+    # IK.Save("data/traj_xd1.txt")
+    
+    # x_d2 = np.loadtxt("data/xd2.txt", delimiter=' ', dtype=np.float)
+    # IK.Solve(J, x_d2, joint_data)
+    # IK.Save("data/traj_xd2.txt")
+    
+    # q3.4 damped least squares
+    IK.Solve(x_d1, joint_data, lamb=0.01)
+    IK.Save("data/traj_xd1_damped.txt")
 
 
 if __name__ == "__main__":

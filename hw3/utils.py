@@ -184,3 +184,12 @@ def JacobianPInv(J):
         J_pinv = J^T (JJ^T)^{-1}
     """
     return J.T @ np.linalg.inv(J @ J.T)
+
+def JacobianInv(J, lamb = 0.0):
+    """
+    Jacobian damped inverse
+        J_inv = J^T (J @ J^T + lambda^2 I)
+        if lamb = 0 then its the same as before
+    """
+    I = np.identity(len(J))
+    return J.T @ np.linalg.inv(J @ J.T + lamb ** 2 * I)
