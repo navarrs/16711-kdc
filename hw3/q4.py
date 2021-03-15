@@ -7,8 +7,7 @@ from math import cos, acos, atan2, sin, pi
 
 np.set_printoptions(4, suppress=True)
 
-# ------------------------------------------------------------------------------
-# Parameters
+from utils import JacobianInv
 
 
 # ------------------------------------------------------------------------------
@@ -17,19 +16,24 @@ np.set_printoptions(4, suppress=True)
 def IKPlanar(L, x, radians=True):
 
     r = np.linalg.norm(x)
+    l1, l2 = L[0], L[1]
+    
+    # knee
+    alpha = acos((l1**2 + l2**2 - r**2) / (2*l1*l2))
+    # theta_knee = np.array([-pi + alpha, -pi - alpha])
+    theta_knee = -pi + alpha
 
-    alpha = acos((L[0]**2 + L[1]**2 - r ** 2) / (2 * L[0] * L[1]))
-    theta2 = np.array([np.pi + alpha, np.pi - alpha])
-
-    beta = acos((r**2 + L[0]**2 - L[1]**2) / (2 * L[0] * r))
+    # ankle
     phi = atan2(x[1], x[0])
-    theta1 = -(pi/2) + np.array([phi + beta, phi - beta])
+    beta = acos((r**2 + l1**2 - l2**2) / (2*l1*r))
+    # theta_ankle = pi/2 - np.array([phi + beta, phi - beta])
+    theta_ankle = pi/2 - phi + beta
 
     if not radians:
-        theta1 *= 180 / pi
-        theta2 *= 180 / pi
+        theta_knee  *= 180 / pi
+        theta_ankle *= 180 / pi
 
-    return theta1, theta2
+    return theta_ankle, theta_knee
 
 
 def IntDynamicsZ(t, Z, az):
@@ -53,7 +57,7 @@ class IntegrateDynamics(object):
 
     def __init__(
         self, config, g=9.81, dt=0.005, err_thresh=1e-3,
-        max_iter=5000, log_step=500
+        max_iter=5000, log_step=250
     ):
         self.L = config["links"]
         self.K = config["K"]
@@ -82,15 +86,18 @@ class IntegrateDynamics(object):
         th_la, th_lk = thetal[0], thetal[1]
         th_ra, th_rk = thetar[0], thetar[1]
 
-        A = -self.L[0] * cos(th_la) - self.L[1] * cos(th_la + th_lk)
-        B = -self.L[0] * sin(th_la) - self.L[1] * sin(th_la + th_lk)
-        C = -self.L[0] * cos(th_ra) - self.L[1] * cos(th_ra + th_rk)
-        D = -self.L[0] * sin(th_ra) - self.L[1] * sin(th_ra + th_rk)
+        l1 = self.L[0]
+        l2 = self.L[1]
+        
+        A = -l1 * cos(th_la) - l2 * cos(th_la + th_lk)
+        B = -l1 * sin(th_la) - l2 * sin(th_la + th_lk)
+        C = -l1 * cos(th_ra) - l2 * cos(th_ra + th_rk)
+        D = -l1 * sin(th_ra) - l2 * sin(th_ra + th_rk)
 
-        Q = -self.L[1] * cos(th_la + th_lk)
-        R = -self.L[1] * sin(th_la + th_lk)
-        S = -self.L[1] * cos(th_ra + th_rk)
-        T = -self.L[1] * sin(th_ra + th_rk)
+        Q = -l2 * cos(th_la + th_lk)
+        R = -l2 * sin(th_la + th_lk)
+        S = -l2 * cos(th_ra + th_rk)
+        T = -l2 * sin(th_ra + th_rk)
 
         E = C*B - A*D
         V = Q*B - R*A
@@ -108,7 +115,7 @@ class IntegrateDynamics(object):
                       [j31, j32,  j33],
                       [0.0, 0.0, -0.5]])
         return J
-
+    
     def Run(self, start_cond):
         
         x, z, theta = start_cond["s0"]
@@ -151,16 +158,13 @@ class IntegrateDynamics(object):
             t = [t_start, t_start + self.dt]
             t_start += self.dt
 
-            sol = solve_ivp(IntDynamicsZ,
-                            t, [z, z_dot], args=[az])
+            sol = solve_ivp(IntDynamicsZ, t, [z, z_dot], args=[az])
             z, z_dot = sol.y[0, -1], sol.y[1, -1]
 
-            sol = solve_ivp(IntDynamicsX,
-                            t, [x, x_dot], args=[ax])
+            sol = solve_ivp(IntDynamicsX, t, [x, x_dot], args=[ax])
             x, x_dot = sol.y[0, -1], sol.y[1, -1]
 
-            sol = solve_ivp(IntDynamicsTheta,
-                            t, [theta, theta_dot], args=[ftheta])
+            sol = solve_ivp(IntDynamicsTheta, t, [theta, theta_dot], args=[atheta])
             theta, theta_dot = sol.y[0, -1], sol.y[1, -1]
 
             states.append([x, z, theta, x_dot, z_dot, theta_dot])
@@ -171,23 +175,132 @@ class IntegrateDynamics(object):
         print(f"Final state {itr}: {states[-1]} error: {error}")
         return np.asarray(states), np.array(torques), error
 
-def Q4_23(config, start_cond):
-    IK = IntegrateDynamics(config)
+    def RunIK(self, start_cond):
+        
+        x, z, theta = start_cond["s0"]
+        z0 = z
+        x_dot, z_dot, theta_dot = start_cond["s0_dot"]
+        
+        sd = start_cond["sd"]
+        sd_dot = start_cond["sd_dot"]
+        
+        states = [[x, z, theta, x_dot, z_dot, theta_dot]]
+        state_des = np.array(
+            [sd[0], sd[1], sd[2], sd_dot[0], sd_dot[1], sd_dot[2]])
+        
+        # jacobian 
+        thetasl = [start_cond["thetal_ak"]]
+        thetasr = [start_cond["thetar_ak"]]
+        
+        error = 100.0
+        itr = 0
+        t_start = 0.0
+        torques = []
+        print(f"Desired state: {state_des}")
+        while error > self.err_thresh and itr < self.max_iter:
 
-    states, torques, err = IK.Run(start_cond)
+            if itr % self.log_step == 0:
+                print(f"Current state {itr}: {states[itr]} error: {error}")
+
+            # update J
+            J = self.Jacobian(thetasl[itr], thetasr[itr])
+            
+            # forces
+            fx, fz, ftheta = self.VirtualForces(states[itr], z0)
+            F = np.array([fx, fz, ftheta])
+
+            # accelerations
+            az = fz / self.M - self.g
+            ax = fx / self.M
+            atheta = ftheta / self.I
+            
+            # torques
+            torques.append(J @ F)
+            
+            # calculate new state
+            t = [t_start, t_start + self.dt]
+            t_start += self.dt
+
+            sol = solve_ivp(IntDynamicsZ, t, [z, z_dot], args=[az])
+            z, z_dot = sol.y[0, -1], sol.y[1, -1]
+
+            sol = solve_ivp(IntDynamicsX, t, [x, x_dot], args=[ax])
+            x, x_dot = sol.y[0, -1], sol.y[1, -1]
+
+            sol = solve_ivp(IntDynamicsTheta, t, [theta, theta_dot], args=[atheta])
+            theta, theta_dot = sol.y[0, -1], sol.y[1, -1]
+
+            states.append([x, z, theta, x_dot, z_dot, theta_dot])
+
+            # update joint angles
+            X = np.array([x +0.2, z])
+            theta_la, theta_lk = IKPlanar(self.L, X)  
+            thetasl.append([theta_la, theta_lk])
+            
+            X = np.array([x -0.2, z])
+            theta_ra, theta_rk = IKPlanar(self.L, X)  
+            thetasr.append([theta_ra, theta_rk])
+            
+            itr += 1
+            error = np.linalg.norm(state_des - states[itr])
+
+        print(f"Final state {itr}: {states[-1]} error: {error}")
+        return np.asarray(states), np.array(torques), error
+
+def Q4_23(config):
+    
+    print(f"\nQ4.2 and Q4.3 ", "-"*50)
+    
+    # get initial joint configuration
+    links = config["L"]
+    xb = np.array(config["xb"])
+    xl = np.array(config["xl_a"])
+    xr = np.array(config["xr_a"])
+    x_shifted = xb - xl
+    thetas_la, thetas_lk = IKPlanar(links, x_shifted)
+    x_shifted = xb - xr
+    thetas_ra, thetas_rk = IKPlanar(links, x_shifted)
+    
+    ID = IntegrateDynamics(config)
+    
+    start_cond = {
+        "s0": [0.0, 0.8, 0.0],
+        "s0_dot": [0.1, -1.0, 0.1],
+        "sd": [0.0, 0.8, 0.0],
+        "sd_dot": [0.0, 0.0, 0.0],
+        "thetal_ak": [thetas_la, thetas_lk],
+        "thetar_ak": [thetas_rk, thetas_rk]
+    }
+    states, torques, err = ID.Run(start_cond)
     
     # plot states
-    fig = plt.figure()
-    ax = plt.axes(projection='3d')
-    
+    fig, ax = plt.subplots(3)
     s = start_cond["s0"]
     g = start_cond["sd"]
     
-    ax.scatter3D(states[:, 0], states[:, 1], states[:, 2], '.')
+    t = np.linspace(0, len(states), len(states))
+    # x 
+    ax[0].scatter(t[0], s[0], label=f'start: {s[0]}', s=10)
+    ax[0].scatter(t[-1], g[0], label=f'goal: {g[0]}', s=10)
+    ax[0].plot(t, states[:, 0], label='x')
+    ax[0].legend(loc='best')
+    ax[0].set(ylabel='x')
     
-    ax.set_xlabel('x')
-    ax.set_ylabel('z')
-    ax.set_zlabel('theta')
+    # z
+    ax[1].scatter(t[0], s[1], label=f'start: {s[1]}', s=10)
+    ax[1].scatter(t[-1], g[1], label=f'goal: {g[1]}', s=10)
+    ax[1].plot(t, states[:, 1], label='z')
+    ax[1].legend(loc='best')
+    ax[1].set(ylabel='z')
+    
+    # theta
+    ax[2].scatter(t[0], s[2], label=f'start: {s[2]}', s=10)
+    ax[2].scatter(t[-1], g[2], label=f'goal: {g[2]}', s=10)
+    ax[2].plot(t, states[:, 2], label='theta')
+    ax[2].legend(loc='best')
+    ax[2].set(xlabel='time', ylabel='theta')
+    
+    # plt.title('states over time')
     plt.savefig("data/traj_states.png")
     plt.show()
     plt.close()
@@ -199,14 +312,54 @@ def Q4_23(config, start_cond):
     plt.plot(t, torques[:, 2], label="t_rk")
     plt.plot(t, torques[:, 3], label="t_rh")
     plt.xlabel("time")
-    plt.ylabel("joint torque")
+    plt.ylabel("joint torques")
+    plt.legend(loc='best')
     plt.savefig("data/traj_torques.png")
     plt.show()
     plt.close()
 
+def Q4_4(config):
+    
+    print(f"\nQ4.4 ", "-"*50)
+    
+    # get initial joint configuration
+    links = config["links"]
+    xb = np.array(config["xb"])
+    xl = np.array(config["xl_a"])
+    xr = np.array(config["xr_a"])
+    x_shifted = xb - xl
+    thetas_la, thetas_lk = IKPlanar(links, x_shifted)
+    x_shifted = xb - xr
+    thetas_ra, thetas_rk = IKPlanar(links, x_shifted)
+    
+    ID = IntegrateDynamics(config)
+    
+    start_cond = {
+        "s0": [0.0, 0.8, 0.0],
+        "s0_dot": [0.1, -1.0, 0.1],
+        "sd": [0.0, 0.8, 0.0],
+        "sd_dot": [0.0, 0.0, 0.0],
+        "thetal_ak": [0.8462, -1.2025],
+        "thetar_ak": [0.3563, -1.2025]
+    }
+    states, torques, err = ID.RunIK(start_cond)
+    
+    # plot torques 
+    t = np.linspace(0, len(torques), len(torques))
+    plt.plot(t, torques[:, 0], label="t_lk")
+    plt.plot(t, torques[:, 1], label="t_lh")
+    plt.plot(t, torques[:, 2], label="t_rk")
+    plt.plot(t, torques[:, 3], label="t_rh")
+    plt.xlabel("time")
+    plt.ylabel("joint torques")
+    plt.legend(loc='best')
+    plt.savefig("data/traj_torques_ik.png")
+    plt.show()
+    plt.close()
 
 def Q4_1(config):
 
+    print(f"\nQ4.1", "-"*50)
     links = config["links"]
     xb = np.array(config["xb"])
     xl = np.array(config["xl_a"])
@@ -214,15 +367,15 @@ def Q4_1(config):
 
     x_shifted = xb - xl
     thetas_la, thetas_lk = IKPlanar(links, x_shifted)
-    print(f"left leg:\n\tankle: {thetas_la}\n\tknee {thetas_lk}")
+    print(f"\nleft leg rad:\n\tankle: {thetas_la}\n\tknee {thetas_lk}")
     thetas_la, thetas_lk = IKPlanar(links, x_shifted, False)
-    print(f"left leg:\n\tankle: {thetas_la}\n\tknee {thetas_lk}")
+    print(f"left leg deg:\n\tankle: {thetas_la}\n\tknee {thetas_lk}")
 
     x_shifted = xb - xr
     thetas_ra, thetas_rk = IKPlanar(links, x_shifted)
-    print(f"right leg:\n\tankle: {thetas_ra}\n\tknee {thetas_rk}")
+    print(f"right leg rad:\n\tankle: {thetas_ra}\n\tknee {thetas_rk}")
     thetas_ra, thetas_rk = IKPlanar(links, x_shifted, False)
-    print(f"right leg:\n\tankle: {thetas_ra}\n\tknee {thetas_rk}")
+    print(f"right leg deg:\n\tankle: {thetas_ra}\n\tknee {thetas_rk}")
 
 # ------------------------------------------------------------------------------
 # Main Program
@@ -245,18 +398,11 @@ def main():
     # q4.1
     Q4_1(config)
 
-    start_cond = {
-        "s0": [0.0, 0.8, 0.0],
-        "s0_dot": [0.1, -1.0, 0.0],
-        "sd": [0.0, 0.8, 0.0],
-        "sd_dot": [0.0, 0.0, 0.0],
-        "thetal_ak": [0.3563, 1.2025],
-        "thetar_ak": [0.8462, 1.2025]
-    }
-
-    # q4.2
-    # obtained in q4.1
-    Q4_23(config, start_cond)
+    # q4.2 and q4.3
+    # Q4_23(config)
+    
+    # q4.4
+    Q4_4(config)
 
 
 if __name__ == "__main__":

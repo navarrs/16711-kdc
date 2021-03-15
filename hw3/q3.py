@@ -1,3 +1,12 @@
+# import array_to_latex as a2l
+import math
+import matplotlib.pyplot as plt
+import numpy as np
+
+from mpl_toolkits.mplot3d import Axes3D
+from pyquaternion import Quaternion
+
+# My utility functions
 from utils import (
     Twist,
     Jacobian,
@@ -5,26 +14,8 @@ from utils import (
     JacobianInv,
     FK
 )
-import matplotlib.pyplot as plt
-import numpy as np
-from pyquaternion import Quaternion
-import math
 
-from mpl_toolkits.mplot3d import Axes3D
 np.set_printoptions(4, suppress=True)
-
-# My utility functions
-
-# ------------------------------------------------------------------------------
-# Load data
-
-# poses
-# x_s = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
-# x_d1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
-# x_d2 = np.loadtxt("data/xd2.txt", delimiter=' ', dtype=np.float)
-
-# joint_data = np.loadtxt("data/joint_data.txt", delimiter=' ', dtype=np.float)
-# v = np.loadtxt("data/v.txt", delimiter=' ', dtype=np.float)
 
 # ------------------------------------------------------------------------------
 # Methods
@@ -48,21 +39,10 @@ class IKSolver(object):
 
     def __init__(
         self,
-        g_ssh,
-        g_sht,
-        twists,
-        FK,
-        Jacobian,
-        JacobianInv,
-        method = "pinv",
-        K=[1, 1],
-        dt=0.001,
-        err_thresh=1e-2,
-        max_iter=5000,
-        log_step=500
+        g_st, twists, FK, Jacobian, JacobianInv,
+        K=[1, 1], dt=0.005, err_thresh=1e-3, max_iter=10000, log_step=1000
     ):
-        self.g_ssh = g_ssh
-        self.g_sht = g_sht
+        self.g_st = g_st
         self.twists = twists
         self.FK = FK
         self.Jacobian = Jacobian
@@ -72,7 +52,6 @@ class IKSolver(object):
         self.err_thresh = err_thresh
         self.max_iter = max_iter
         self.log_step = log_step
-        self.method = method
 
         self.Q = []
 
@@ -92,18 +71,18 @@ class IKSolver(object):
         return e, np.linalg.norm(e, ord=2)
 
     def UpdatePose(self, q):
-        g = self.g_ssh @ self.FK(self.twists, q, self.g_sht)
+        g = self.FK(self.twists, q, self.g_st)
         t = g[:3, -1]
         R = g[:3, :3]
         quat = Quaternion(matrix=R).unit
         return t, quat
 
-    def Solve(self, x_d, q0, lamb = 0.0):
+    def Solve(self, x_d, q0, lamb=0.0):
         itr = 0
         pd = x_d[:3]
         quatd = Quaternion(x_d[-1], x_d[3], x_d[4], x_d[5])
-        norm_error = 10000
-        
+        norm_error = 100
+
         self.Q = [q0]
         while norm_error > self.err_thresh and itr < self.max_iter:
             # compute new pose
@@ -116,74 +95,122 @@ class IKSolver(object):
                 print(f"\trotation: {np.linalg.norm(v[3:])}")
                 print(f"\tcurrent pose: {ps}, {quats}")
                 print(f"\tgoal pose: {pd}, {quatd}")
-                
+
             # v = ek
             v[:3] *= self.K[0]
-            v[3:] *= self.K[1] 
+            v[3:] *= self.K[1]
 
             # jacobian
             J = self.Jacobian(self.twists, self.Q[itr])
-            
-            J_pinv = self.JacobianInv(J, lamb) # if 0 then its the moore-penrose
+
+            # if lambda > 0 then its damped least squares
+            J_pinv = self.JacobianInv(J, lamb)
             q_dot = J_pinv @ v
-                
 
             # get new q
             q = self.Q[itr] + q_dot * self.dt
             self.Q.append(q)
+
+            itr += 1
             
-            itr += 1    
+        print(f"[END: {itr}]\n\tpose error: {norm_error}")
+        print(f"\ttranslation: {np.linalg.norm(v[:3])}")
+        print(f"\trotation: {np.linalg.norm(v[3:])}")
+        print(f"\tcurrent pose: {ps}, {quats}")
+        print(f"\tgoal pose: {pd}, {quatd}")
 
     def Save(self, outdir="data/trajectory.txt"):
         np.savetxt(outdir, np.asarray(self.Q), fmt="%10.5f", delimiter=' ')
 
+def Q3_1(twists, joint_data):
+    print(f"\n\nQ3.1", '-'*10)
+    J = Jacobian(twists, joint_data)
+    print(f"jacobian:\n{J}")
+    # a2l.to_ltx(J, frmt='{:6.4f}', arraytype = 'array')
+    
+    # just a sanity check
+    g_sht = np.loadtxt("data/g_shoulder_tool.txt", delimiter=' ', dtype=np.float)
+    g =  FK(twists, joint_data, g_sht)
+    print(f"g_s:\n{g}")
+    
+def Q3_2():
+    print(f"\n\nQ3.2", '-'*10)
+    xs = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
+    xd = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
+    
+    ps = xs[:3]
+    qs = Quaternion(xs[-1], xs[3], xs[4], xs[5])
+    
+    pd = xd[:3]
+    qd = Quaternion(xd[-1], xd[3], xd[4], xd[5])
+    
+    et = pd - ps
+    # et = et / np.linalg.norm(et)
+    eo = (qd * qs.inverse)
+    eo = eo.imaginary
+    
+    print(f"\nv: trans {et}")
+    print(f"v: orient {eo}")
+    
+def Q3_3(twists, joint_data):
+    print(f"\n\nQ3.3", '-'*50)
+    
+    g_st = np.loadtxt("data/g_shoulder_tool.txt", delimiter=' ', dtype=np.float)
+    xs = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
+    xd1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
+    xd2 = np.loadtxt("data/xd2.txt", delimiter=' ', dtype=np.float)
+    
+    IK = IKSolver(g_st, twists, FK, Jacobian, JacobianInv)
+    
+    # solve xd1
+    print(f"\nIK for pose: {xd1}")
+    IK.Solve(xd1, joint_data)
+    IK.Save("data/traj_xd1.txt")
+    
+    print(f"\nIK for pose: {xd2}")
+    IK.Solve(xd2, joint_data)
+    IK.Save("data/traj_xd2.txt")
+    
+def Q3_4(twists, joint_data):
+    print(f"\n\nQ3.4", '-'*50)
+    
+    g_st = np.loadtxt("data/g_shoulder_tool.txt", delimiter=' ', dtype=np.float)
+    xs = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
+    xd1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
+    xd2 = np.loadtxt("data/xd2.txt", delimiter=' ', dtype=np.float)
+    
+    IK = IKSolver(g_st, twists, FK, Jacobian, JacobianInv)
+    
+    print(f"\nIK for pose: {xd1}")
+    IK.Solve(xd1, joint_data, lamb=0.005)
+    IK.Save("data/traj_xd1_damped.txt")
+    
+    print(f"\nIK for pose: {xd2}")
+    IK.Solve(xd2, joint_data, lamb=0.005)
+    IK.Save("data/traj_xd2_damped.txt")
+    
+
 # ------------------------------------------------------------------------------
 # Main Program
 
-
 def main():
-    # g spatial wrt base
-    g_sb = np.loadtxt("data/g_spatial_base.txt", delimiter=" ", dtype=np.float)
-    print(f"g base wrt world:\n{g_sb}")
-
-    # g shoulder wrt base
-    g_bsh = np.loadtxt("data/g_base_shoulder.txt",
-                       delimiter=" ", dtype=np.float)
-    print(f"g shoulder wrt base:\n{g_bsh}")
-
-    # g tool wrt shoulder
-    g_sht = np.loadtxt("data/g_shoulder_tool.txt",
-                       delimiter=" ", dtype=np.float)
-    print(f"G tool wrt shoulder:\n{g_sht}")
-
+    # parametrs ----------------------------------------------------------------
     # q and w vector to compute the twists
     qw = np.loadtxt("data/qw.txt", delimiter=' ', dtype=np.float)
     print(f"q and w vectors:\n{qw}")
+    # compute the twists
     twists = ComputeTwists(qw)
-
-    # q3.1 compute the jacobian matrix
-    joint_data = np.loadtxt("data/joint_data.txt",
-                            delimiter=' ', dtype=np.float)
-    J = Jacobian(twists, joint_data)
-    print(f"Q3.1 Jacobian:\n{J}")
-
-    # q3.3 Jacobian pseudoinverse
-    g_ssh = g_sb @ g_bsh
-    g = g_ssh @ FK(twists, joint_data, g_sht)
-    print(f"g_s:\n{g}")
-
-    x_d1 = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
-    IK = IKSolver(g_ssh, g_sht, twists, FK, Jacobian, JacobianInv)
-    # IK.Solve(x_d1, joint_data)
-    # IK.Save("data/traj_xd1.txt")
+    # compute jacobian
+    joint_data = np.loadtxt("data/joint_data.txt", delimiter=' ', dtype=np.float)
     
-    # x_d2 = np.loadtxt("data/xd2.txt", delimiter=' ', dtype=np.float)
-    # IK.Solve(J, x_d2, joint_data)
-    # IK.Save("data/traj_xd2.txt")
+    # problems -----------------------------------------------------------------
+    # Q3_1(twists, joint_data)
     
-    # q3.4 damped least squares
-    IK.Solve(x_d1, joint_data, lamb=0.01)
-    IK.Save("data/traj_xd1_damped.txt")
+    # Q3_2()
+    
+    # Q3_3(twists, joint_data)
+    
+    Q3_4(twists, joint_data)
 
 
 if __name__ == "__main__":
