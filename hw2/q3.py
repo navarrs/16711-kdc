@@ -40,7 +40,7 @@ joint_data = np.loadtxt("data/joint_data.txt", delimiter=' ', dtype=np.float)
 # ------------------------------------------------------------------------------
 # Methods
 
-def compute_twists(qw_matrix):
+def ComputeTwists(qw_matrix):
     twists = np.zeros((len(qw_matrix), 6), dtype=np.float)
     for i, qw in enumerate(qw_matrix):
         # sanity check
@@ -51,13 +51,13 @@ def compute_twists(qw_matrix):
     return twists
 
 
-def skew(w):
+def Skew(w):
     return np.array([[0,  -w[2], w[1]],
                      [w[2],  0, -w[0]],
                      [-w[1], w[0], 0]], dtype=np.float)
 
 
-def rodrigues(w_hat, theta):
+def Rodrigues(w_hat, theta):
     return (
         np.identity(3) 
         + w_hat * np.sin(theta) 
@@ -65,7 +65,7 @@ def rodrigues(w_hat, theta):
     )
 
 
-def compute_matrix_exponential_xi(twist, w_hat, theta):
+def ComputeExpXi(twist, w_hat, theta):
     I = np.identity(3)
     exp_xi = np.identity(4)
 
@@ -74,7 +74,7 @@ def compute_matrix_exponential_xi(twist, w_hat, theta):
     w = twist[3:]
 
     # compute the rotation part
-    R = rodrigues(w_hat, theta)
+    R = Rodrigues(w_hat, theta)
     exp_xi[:3, :3] = R
 
     # compute the translation part
@@ -88,12 +88,12 @@ def compute_matrix_exponential_xi(twist, w_hat, theta):
 # Main Program
 
 def main():
-    twists = compute_twists(qw)
+    twists = ComputeTwists(qw)
     n_twists = len(twists)
     
     w_hats = np.zeros(shape=(n_twists, 3, 3), dtype=np.float)
     for n in range(n_twists):
-        w_hats[n] = skew(twists[n, 3:])
+        w_hats[n] = Skew(twists[n, 3:])
     
     print(f"Twists:\n{twists}")
 
@@ -103,7 +103,7 @@ def main():
         # Compute matrix exponentials 
         xi_exp = np.identity(4)
         for i, joint_angle in enumerate(joints):
-            xi_exp = xi_exp @ compute_matrix_exponential_xi(
+            xi_exp = xi_exp @ ComputeExpXi(
                 twists[i], w_hats[i], joint_angle)
             
         # Compute G tool wrt shoulder 

@@ -1,3 +1,7 @@
+# -----------------------------------------------------------------------------#
+# @author ingridn
+# @brief  16-711 KDC Hw3 - solves the inverse kinematics for a desired position
+# -----------------------------------------------------------------------------#
 # import array_to_latex as a2l
 import math
 import matplotlib.pyplot as plt
@@ -84,11 +88,16 @@ class IKSolver(object):
         norm_error = 100
 
         self.Q = [q0]
+        
+        self.ps_err = []
+        self.qs_err = []
         while norm_error > self.err_thresh and itr < self.max_iter:
             # compute new pose
             ps, quats = self.UpdatePose(self.Q[itr])
             v, norm_error = self.PoseError(pd, quatd, ps, quats)
-
+            self.ps_err.append(np.linalg.norm(v[:3]))
+            self.qs_err.append(np.linalg.norm(v[3:]))
+            
             if itr % self.log_step == 0 or itr == self.max_iter - 1:
                 print(f"[{itr}/{self.max_iter}]\n\tpose error: {norm_error}")
                 print(f"\ttranslation: {np.linalg.norm(v[:3])}")
@@ -119,10 +128,31 @@ class IKSolver(object):
         print(f"\tcurrent pose: {ps}, {quats}")
         print(f"\tgoal pose: {pd}, {quatd}")
 
-    def Save(self, outdir="data/trajectory.txt"):
+    def Save(self, outdir="out/trajectory.txt"):
         np.savetxt(outdir, np.asarray(self.Q), fmt="%10.5f", delimiter=' ')
+    
+    def PlotError(self, outfile="out/error.txt"):
+        # plot states
+        fig, ax = plt.subplots(2)
+    
+        t = np.linspace(0, len(self.ps_err), len(self.ps_err))
+        
+        # pose 
+        ax[0].plot(t, self.ps_err, label='pos. error')
+        ax[0].legend(loc='best')
+        ax[0].set(ylabel='error')
+        
+        # z
+        ax[1].plot(t, self.qs_err, label='rot. error')
+        ax[1].legend(loc='best')
+        ax[1].set(ylabel='error')
+        
+        # plt.title('states over time')
+        plt.savefig(outfile)
+        plt.show()
+        plt.close()
 
-def Q3_1(twists, joint_data):
+def Q3a(twists, joint_data):
     print(f"\n\nQ3.1", '-'*10)
     J = Jacobian(twists, joint_data)
     print(f"jacobian:\n{J}")
@@ -133,7 +163,7 @@ def Q3_1(twists, joint_data):
     g =  FK(twists, joint_data, g_sht)
     print(f"g_s:\n{g}")
     
-def Q3_2():
+def Q3b():
     print(f"\n\nQ3.2", '-'*10)
     xs = np.loadtxt("data/xs.txt", delimiter=' ', dtype=np.float)
     xd = np.loadtxt("data/xd1.txt", delimiter=' ', dtype=np.float)
@@ -152,7 +182,7 @@ def Q3_2():
     print(f"\nv: trans {et}")
     print(f"v: orient {eo}")
     
-def Q3_3(twists, joint_data):
+def Q3c(twists, joint_data):
     print(f"\n\nQ3.3", '-'*50)
     
     g_st = np.loadtxt("data/g_shoulder_tool.txt", delimiter=' ', dtype=np.float)
@@ -165,13 +195,15 @@ def Q3_3(twists, joint_data):
     # solve xd1
     print(f"\nIK for pose: {xd1}")
     IK.Solve(xd1, joint_data)
-    IK.Save("data/traj_xd1.txt")
+    IK.Save("out/traj_xd1.txt")
+    IK.PlotError("out/pose_error_xd1.png")
     
     print(f"\nIK for pose: {xd2}")
     IK.Solve(xd2, joint_data)
-    IK.Save("data/traj_xd2.txt")
+    IK.Save("out/traj_xd2.txt")
+    IK.PlotError("out/pose_error_xd2.png")
     
-def Q3_4(twists, joint_data):
+def Q3d(twists, joint_data):
     print(f"\n\nQ3.4", '-'*50)
     
     g_st = np.loadtxt("data/g_shoulder_tool.txt", delimiter=' ', dtype=np.float)
@@ -183,11 +215,13 @@ def Q3_4(twists, joint_data):
     
     print(f"\nIK for pose: {xd1}")
     IK.Solve(xd1, joint_data, lamb=0.005)
-    IK.Save("data/traj_xd1_damped.txt")
+    IK.Save("out/traj_xd1_damped.txt")
+    IK.PlotError("out/pose_error_xd1_damped.png")
     
     print(f"\nIK for pose: {xd2}")
     IK.Solve(xd2, joint_data, lamb=0.005)
-    IK.Save("data/traj_xd2_damped.txt")
+    IK.Save("out/traj_xd2_damped.txt")
+    IK.PlotError("out/pose_error_xd2_damped.png")
     
 
 # ------------------------------------------------------------------------------
@@ -204,13 +238,13 @@ def main():
     joint_data = np.loadtxt("data/joint_data.txt", delimiter=' ', dtype=np.float)
     
     # problems -----------------------------------------------------------------
-    # Q3_1(twists, joint_data)
+    Q3a(twists, joint_data)
     
-    # Q3_2()
+    Q3b()
     
-    # Q3_3(twists, joint_data)
+    Q3c(twists, joint_data)
     
-    Q3_4(twists, joint_data)
+    Q3d(twists, joint_data)
 
 
 if __name__ == "__main__":

@@ -58,7 +58,7 @@ X = np.linalg.pinv(A) @ b
 q_cm = X[:3]
 q_b = X[3:6]
 v_cm = X[6:] 
-print(f"q_cm: {q_cm}\nq_b: {q_b}\nv_cm: {v_cm}")
+print(f"\na) v_cm: {v_cm}")
 
 
 # q3.2 - inertia tensor
@@ -66,7 +66,6 @@ A = np.zeros(shape=(3*N-6, 6), dtype=np.float)
 wb = np.array(wb)
 
 for t in range(N-2):
-    
     Rt = Rotation.from_rotvec(wb[t]).as_matrix()
     qt = Quaternion(matrix=Rt)
     
@@ -93,15 +92,15 @@ I_tensor = np.array([
     [I[0], I[1], I[2]],
     [I[1], I[3], I[4]],
     [I[2], I[4], I[5]]])
-print(f"inertia tensor:\n{I_tensor}")
+print(f"\nb) inertia tensor:\n{I_tensor}")
 
 # q3.3 - transforming inertia tensor to 
 I = np.linalg.eigvals(I_tensor)
 I_tensor_p = I * np.identity(3)
-print(f"principal axis inertia tensor:\n{I_tensor_p}")
+print(f"\nc)principal axis inertia tensor:\n{I_tensor_p}")
 
 # q3.4 - distance from center of mass and beacon
-print(f"distance q_cm to q_b: {X[3:6]} distance: {np.linalg.norm(X[:3] - X[3:6])}")
+print(f"\nd) offset q_cm to q_b: {q_b} norm: {np.linalg.norm(q_b)}")
 
 # q3.5 - angular momentum
 # H = R I_b w_b
@@ -111,17 +110,50 @@ for t in range(len(wb)):
     q = Quaternion(q[3], q[0], q[1], q[2])
     R = q.rotation_matrix
     H += R @ I_tensor @ wb[t]
-print(f"angular momentum: {H / len(wb)}")
+print(f"\ne) angular momentum: {H / len(wb)}")
 
 # q3.6 - asteroid pose after 120s
 T_120 = T.tolist()
 points_120 = points.tolist()
 quats_120 = quats.tolist()
 
+# measure the error using this method
+err = np.zeros(shape=3)
+for t in range(2, 61):
+    
+    qtm1 = quats_120[t-1]    
+    qtm1 = Quaternion(qtm1[3], qtm1[0], qtm1[1], qtm1[2])
+
+    qtm2 = quats_120[t-2]
+    qtm2 = Quaternion(qtm2[3], qtm2[0], qtm2[1], qtm2[2])
+    
+    qd = qtm1 * qtm2.inverse
+    theta = 2 * math.acos(qd.real)
+    wtm1 = np.zeros(shape=3)
+    if not np.isclose(theta, 0):
+        wtm1 = qd.imaginary / math.sin(theta/2)
+        wtm1 = theta * wtm1 / np.linalg.norm(wtm1)
+    wtm1 = Quaternion(0, wtm1[0], wtm1[1], wtm1[2])
+    
+    # numerical
+    qt = qtm1 + 0.5 * wtm1 * qtm1
+    qt = qt.normalised
+    
+    # measured 
+    qt_m = quats[t]
+    qt_m = Quaternion(qt_m[3], qt_m[0], qt_m[1], qt_m[2])
+    print(f"reconstructed\tqt: {qt}")
+    print(f"measured\tqt: {qt_m}")
+    err += (qt_m * qt.inverse).imaginary
+
+err = err / 58
+print(f"\terror: {err}\n\tnorm: {np.linalg.norm(err)}")
+    
 for t in range(61, 121):
     T_120.append(t)
     
     qtm1 = quats_120[t-1]
+    
     qtm1 = Quaternion(qtm1[3], qtm1[0], qtm1[1], qtm1[2])
     
     qtm2 = quats_120[t-2]
@@ -135,7 +167,7 @@ for t in range(61, 121):
         wtm1 = theta * wtm1 / np.linalg.norm(wtm1)
     wtm1 = Quaternion(0, wtm1[0], wtm1[1], wtm1[2])
     
-    # numerical approx
+    # numerical
     qt = qtm1 + 0.5 * wtm1 * qtm1
     qt = qt.normalised
     Rt = qt.rotation_matrix
@@ -146,7 +178,7 @@ for t in range(61, 121):
     xyz = q_cm + Rt @ q_b + v_cm * t 
     points_120.append(xyz)
 
-print(f"last pose t: {T[-1]} xyz: {points_120[-1]} quat: {quats_120[-1]}")
+print(f"\nf) last pose t: {T_120[-1]} xyz: {points_120[-1]} quat: {quats_120[-1]}")
 
 points_120 = np.asarray(points_120)  
 fig = plt.figure()

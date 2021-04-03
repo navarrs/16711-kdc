@@ -1,5 +1,11 @@
-
+# -----------------------------------------------------------------------------#
+# @author ingridn
+# @brief  16-711 KDC Hw3 - virtual model control
+# -----------------------------------------------------------------------------#
 import matplotlib.pyplot as plt
+import mpl_toolkits.mplot3d.axes3d as p3
+import matplotlib.animation as animation
+
 import numpy as np
 
 from scipy.integrate import solve_ivp
@@ -21,7 +27,7 @@ def IKPlanar(L, x, radians=True):
     # knee
     alpha = acos((l1**2 + l2**2 - r**2) / (2*l1*l2))
     # theta_knee = np.array([-pi + alpha, -pi - alpha])
-    theta_knee = -pi + alpha
+    theta_knee = pi + alpha
 
     # ankle
     phi = atan2(x[1], x[0])
@@ -184,13 +190,13 @@ class IntegrateDynamics(object):
         sd = start_cond["sd"]
         sd_dot = start_cond["sd_dot"]
         
-        states = [[x, z, theta, x_dot, z_dot, theta_dot]]
+        self.states = [[x, z, theta, x_dot, z_dot, theta_dot]]
         state_des = np.array(
             [sd[0], sd[1], sd[2], sd_dot[0], sd_dot[1], sd_dot[2]])
         
         # jacobian 
-        thetasl = [start_cond["thetal_ak"]]
-        thetasr = [start_cond["thetar_ak"]]
+        self.thetasl = [start_cond["thetal_ak"]]
+        self.thetasr = [start_cond["thetar_ak"]]
         
         error = 100.0
         itr = 0
@@ -200,13 +206,13 @@ class IntegrateDynamics(object):
         while error > self.err_thresh and itr < self.max_iter:
 
             if itr % self.log_step == 0:
-                print(f"Current state {itr}: {states[itr]} error: {error}")
+                print(f"Current state {itr}: {self.states[itr]} error: {error}")
 
             # update J
-            J = self.Jacobian(thetasl[itr], thetasr[itr])
+            J = self.Jacobian(self.thetasl[itr], self.thetasr[itr])
             
             # forces
-            fx, fz, ftheta = self.VirtualForces(states[itr], z0)
+            fx, fz, ftheta = self.VirtualForces(self.states[itr], z0)
             F = np.array([fx, fz, ftheta])
 
             # accelerations
@@ -230,29 +236,78 @@ class IntegrateDynamics(object):
             sol = solve_ivp(IntDynamicsTheta, t, [theta, theta_dot], args=[atheta])
             theta, theta_dot = sol.y[0, -1], sol.y[1, -1]
 
-            states.append([x, z, theta, x_dot, z_dot, theta_dot])
+            self.states.append([x, z, theta, x_dot, z_dot, theta_dot])
 
             # update joint angles
             X = np.array([x +0.2, z])
             theta_la, theta_lk = IKPlanar(self.L, X)  
-            thetasl.append([theta_la, theta_lk])
+            self.thetasl.append([theta_la, theta_lk])
             
             X = np.array([x -0.2, z])
             theta_ra, theta_rk = IKPlanar(self.L, X)  
-            thetasr.append([theta_ra, theta_rk])
+            self.thetasr.append([theta_ra, theta_rk])
             
             itr += 1
-            error = np.linalg.norm(state_des - states[itr])
+            error = np.linalg.norm(state_des - self.states[itr])
+        
+        print(f"Final state {itr}: {self.states[-1]} error: {error}")
+        return np.asarray(self.states), np.array(torques), error
+    
+    def Animate(self):
+        fig, ax = plt.subplots()
+        ax.axis([-0.8,0.8,0,1])
+        
+        # feet -- these are always fixed
+        xl, xr = [-0.2, 0.0], [0.2, 0.0]
+        
+        def update(i):
+            # state of end-effector at i
+            s = self.states[i]
+            
+            # state of left knee
+            lkx = -0.2 + self.L[0]* sin(self.thetasl[i][0])
+            lkz = self.L[0] * cos(self.thetasl[i][0])
+            
+            # state of right knee
+            rkx = 0.2 + self.L[0] * sin(self.thetasr[i][0])
+            rkz = self.L[0] * cos(self.thetasr[i][0])
+            
+            sc = np.array([[s[0], s[1]],     # state eef
+                           [lkx, lkz],       # left knee
+                           [rkx, rkz],       # right knee
+                           [xl[0], xl[1]],   # left ankle -- fixed
+                           [xr[0], xr[1]]])  # right ankle -- fixed
+            
+            scatter.set_offsets(sc)
+            return scatter,
+        
+        s = self.states[0]
+        l = self.thetasl[0]
+        r = self.thetasr[0]
+        
+        sc = np.array([[s[0], s[1]], 
+                       [l[0], l[1]], 
+                       [r[0], r[1]], 
+                       [xl[0], xl[1]], 
+                       [xr[0], xr[1]]])
+        
+        scatter = ax.scatter(sc[:, 0], sc[:, 1], marker='o') 
+        iterations = len(self.states)
+        
+        ani = animation.FuncAnimation(
+            fig, update, iterations, interval=50, blit=False, repeat=False)
+        plt.show()
+        
+        ani.save('out/joints.gif', writer='pillow', fps=30)
+        plt.close()
 
-        print(f"Final state {itr}: {states[-1]} error: {error}")
-        return np.asarray(states), np.array(torques), error
 
 def Q4_23(config):
     
     print(f"\nQ4.2 and Q4.3 ", "-"*50)
     
     # get initial joint configuration
-    links = config["L"]
+    links = config["links"]
     xb = np.array(config["xb"])
     xl = np.array(config["xl_a"])
     xr = np.array(config["xr_a"])
@@ -301,7 +356,7 @@ def Q4_23(config):
     ax[2].set(xlabel='time', ylabel='theta')
     
     # plt.title('states over time')
-    plt.savefig("data/traj_states.png")
+    plt.savefig("out/traj_states.png")
     plt.show()
     plt.close()
     
@@ -314,7 +369,7 @@ def Q4_23(config):
     plt.xlabel("time")
     plt.ylabel("joint torques")
     plt.legend(loc='best')
-    plt.savefig("data/traj_torques.png")
+    plt.savefig("out/traj_torques.png")
     plt.show()
     plt.close()
 
@@ -339,10 +394,14 @@ def Q4_4(config):
         "s0_dot": [0.1, -1.0, 0.1],
         "sd": [0.0, 0.8, 0.0],
         "sd_dot": [0.0, 0.0, 0.0],
-        "thetal_ak": [0.8462, -1.2025],
-        "thetar_ak": [0.3563, -1.2025]
+        "thetal_ak": [thetas_la, thetas_lk],
+        "thetar_ak": [thetas_ra, thetas_rk]
     }
     states, torques, err = ID.RunIK(start_cond)
+    
+    # plot states
+    s = start_cond["s0"]
+    g = start_cond["sd"]
     
     # plot torques 
     t = np.linspace(0, len(torques), len(torques))
@@ -353,9 +412,11 @@ def Q4_4(config):
     plt.xlabel("time")
     plt.ylabel("joint torques")
     plt.legend(loc='best')
-    plt.savefig("data/traj_torques_ik.png")
+    plt.savefig("out/traj_torques_ik.png")
     plt.show()
     plt.close()
+    
+    ID.Animate()
 
 def Q4_1(config):
 
@@ -399,7 +460,7 @@ def main():
     Q4_1(config)
 
     # q4.2 and q4.3
-    # Q4_23(config)
+    Q4_23(config)
     
     # q4.4
     Q4_4(config)
