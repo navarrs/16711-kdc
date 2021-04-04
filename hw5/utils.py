@@ -12,20 +12,9 @@ def Skew(v):
                | z  0 -x |
                |-y  x  0 |
     """
-    return Matrix([[0,   -v[2], v[1]],
-                   [v[2],    0, -v[0]],
-                   [-v[1], v[0],   0]])
-
-
-def Skew2Vec(M):
-    """
-    Skew matrix to vector:
-        x = M[2, 1]
-        y = M[0, 2]
-        z = M[1, 0]
-    """
-    return Array([M[2, 1], M[0, 2], M[1, 0]])
-
+    return Matrix([[0,    -v[2],  v[1]],
+                   [v[2],     0, -v[0]],
+                   [-v[1], v[0],    0]])
 
 def Rodrigues(w_hat, theta):
     """
@@ -48,19 +37,6 @@ def Twist(q, w):
     twist[:3, :3] = Skew(w)
     twist[:3, -1] = -w.cross(q)
     return twist
-    
-
-def Twist2Vec(twist):
-    """
-    Twist to vector:
-        xi = | -w x q | 
-             |    w   | 
-    """
-    xi_vec = np.zeros(shape=(6), dtype=np.float)
-    xi_vec[:3] = twist[:3, -1]
-    xi_vec[3:] = Skew2Vec(twist[:3, :3])
-    return xi_vec
-
 
 def ExpTwist(xi, theta):
     """
@@ -100,23 +76,6 @@ def ExpTwist(xi, theta):
         
     return exp_xi
 
-
-def Adj(g):
-    """
-    Adjoint Transformation is:
-        Ad = | R   p_hat R |
-             | 0      R    |
-    """
-    R = g[:3, :3]
-    p_hat = Skew(g[:3, -1])
-
-    adj = zeros(6)
-    adj[:3, :3] = R
-    adj[:3, 3:] = p_hat * R
-    adj[3:, 3:] = R
-    return adj
-
-
 def AdjInv(g):
     """
     Adjoint Transformation inverse:
@@ -129,7 +88,6 @@ def AdjInv(g):
     p = g[:3, -1]
     p_hat = Skew(p)
    
-
     adj_inv = zeros(6)
     adj_inv[:3, :3] = R_T
     adj_inv[:3, 3:] = -R_T * p_hat
@@ -151,52 +109,94 @@ def FK(twists, thetas, g_st_0):
 
     return simplify(g_st_theta @ g_st_0)
 
-def Jacobian(twists, thetas):
-    """ 
-    Jacobian in spatial frame:
-        J = [xi_1, x_2' ... xi_n']
-        where xi_j = Adj(e^{xi_1 theta_1}...e^{xi_j-1 theta_j-1}) xi_j
+def ComputeMassMatrix(m, Ix, Iy, Iz):
     """
-    assert len(twists) == len(thetas), \
-        f"err: twists size {len(twists)} != thetas size {len(thetas)}"
-    
-    N = len(thetas)
-    
-    # Jacobian 
-    J = np.zeros(shape=(6, N), dtype=np.float)
-    
-    # Compute exponentials of twists
-    exp_xis = np.zeros(shape=(N, 4, 4), dtype=np.float)
-    for i in range(N):
-        exp_xis[i] = ExpTwist(twists[i], thetas[i])
-        # print(f"Exp_xi {i}\n{exp_xis[i]}")
-    
-    # First column of J is the vector of twist 1
-    J[:, 0] = Twist2Vec(twists[0])
-    
-    # The next columns are Adj[1...(j-1)] @ twist_j
-    exp_temp = np.identity(n=4, dtype=np.float)
-    adj = np.identity(6, dtype=np.float)
-    for j in range(N):
-        if j > 0:
-            exp_temp = exp_temp @ exp_xis[j-1]
-            adj = Adj(exp_temp)
-        J[:, j] = adj @ Twist2Vec(twists[j])
+    Computes a mass matrix in the form 
+    M = | m 0 0  0  0  0 |
+        | 0 m 0  0  0  0 |
+        | 0 0 m  0  0  0 |
+        | 0 0 0 Ix  0  0 |
+        | 0 0 0  0 Iy  0 |
+        | 0 0 0  0  0 Iz |
+    """
+    M = zeros(6)
+    M[0, 0] = M[1, 1] = M[2, 2] = m    
+    M[3, 3] = Ix
+    M[4, 4] = Iy
+    M[5, 5] = Iz
+    return M   
+
+def ComputeInertiaMatrix(M_list, J_list, simp=True):
+    """
+    Computes the inertia matrix as:
+        M = J1.T M1 J1 + ... + Jn.T Mn Jn
+    note: assumes lists are in order.
+    """
+    M = zeros(3)
+    assert len(M_list) == len(J_list), \
+        f"Mass list {len(M_list)} and Jacobian list {len(J_list)} size mismatch"
         
-    return J
+    for i in range(len(M_list)):
+        M += J_list[i].T * M_list[i] * J_list[i]
+    
+    if simp:
+        return simplify(M)
+    return M
 
-def JacobianPInv(J):
-    """
-    Jacobian Pseudo Inverse:
-        J_pinv = J^T (JJ^T)^{-1}
-    """
-    return J.T @ np.linalg.inv(J @ J.T)
 
-def JacobianInv(J, lamb = 0.0):
+def ComputeCoriollisMatrix(M, thetas, dthetas, simp=True):
     """
-    Jacobian damped inverse
-        J_inv = J^T (J @ J^T + lambda^2 I)
-        if lamb = 0 then its the same as before
+    Computes the coriollis matrix as:
+    C = 0.5 sum_k=1^n (dpMij/dpthetak + dpMik/dpthetaj - dpMkj/dpthetai) dthetak
     """
-    I = np.identity(len(J))
-    return J.T @ np.linalg.inv(J @ J.T + lamb ** 2 * I)
+    C = zeros(3)
+    for i in range(C.shape[0]):
+        for j in range(C.shape[1]):
+            for k in range(3):
+                # compute the centrifugal forces using inertia matrix
+                if thetas[k] == 0.0:
+                    dMij = 0.0
+                else:
+                    dMij = diff(M[i, j], thetas[k])
+                
+                if thetas[j] == 0.0:
+                    dMik = 0.0
+                else:
+                    dMik = diff(M[i, k], thetas[j])
+                
+                if thetas[i] == 0.0:
+                    dMkj = 0.0
+                else:
+                    dMkj = diff(M[k, j], thetas[i])
+                Fijk = (dMij + dMik - dMkj) / 2
+                # print(f"F_{i+1}{j+1}{k+1}:")
+                # pprint(F_ijk)
+                C[i, j] += Fijk * dthetas[k]
+    if simp:
+        return simplify(C)
+    return C
+
+def ComputeExternalForces(m, h, g, thetas, simp=True):
+    """
+    Computes external forces vector
+    """
+    assert len(m) == len(h) == len(thetas), \
+        f"Mass {len(m)}, height {len(h)}, thetas {len(thetas)} size mismatch"
+    
+    # compute the potential energy 
+    V = 0
+    n = len(m)
+    for i in range(n):
+        V += m[i] * h[i] * g
+    
+    # compute the effect of the gravitational forces
+    N = zeros(n, 1)
+    for i in range(n):
+        if thetas[i] == 0.0:
+            N[i] = 0.0
+        else:
+            N[i] = diff(V, thetas[i])
+    
+    if simp:
+        return simplify(N)
+    return N
