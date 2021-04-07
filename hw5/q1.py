@@ -3,6 +3,10 @@
 # @author ingridn
 # @brief  16-711 KDC Hw5 
 # -----------------------------------------------------------------------------#
+import matplotlib.pyplot as plt
+import numpy as np
+
+from math import pi
 from utils import (
     AdjInv, 
     ComputeCoriollisMatrix,
@@ -13,9 +17,11 @@ from utils import (
     FK,
     Twist, 
 )
+from scipy.integrate import solve_ivp
 from sympy import *
-from math import pi
 init_printing(use_unicode=True)
+
+forward_dynamics = True
 
 # ------------------------------------------------------------------------------
 # Symbols
@@ -31,24 +37,23 @@ Ix3,Iy3,Iz3 = symbols("Ix3,Iy3,Iz3")
 
 # ------------------------------------------------------------------------------
 # Config
-C = {
-    "l0": 1, "l1": 1, "l2": 1,
-    "r0": 0.5, "r1": 0.5, "r2": 0.5,
-    "m1": 1, "m2": 1, "m3": 1,
-    "Ix1": 1, "Iy1": 1, "Iz1": 1,
-    "Ix2": 1, "Iy2": 1, "Iz2": 1,
-    "Ix3": 1, "Iy3": 1, "Iz3": 1,
-    "theta1": 0.0, "theta2": pi/2.0, "theta3": 0.0,
-    "gtheta1": 0.0, "gtheta2": 0.0, "gtheta3": 0.0,
-    "g": 9.81
-}
-l0, l1, l2 = C["l0"], C["l1"], C["l2"]
-r0, r1, r2 = C["r0"], C["r1"], C["r2"]
-m1, m2, m3 = C["m1"], C["m2"], C["m3"] 
-Ix1, Iy1, Iz1 = C["Ix1"], C["Iy1"], C["Iz1"]
-Ix2, Iy2, Iz2 = C["Ix2"], C["Iy2"], C["Iz2"]
-Ix3, Iy3, Iz3 = C["Ix3"], C["Iy3"], C["Iz3"]
-g = C["g"]
+if forward_dynamics:
+    C = {
+        "l0": 1, "l1": 1, "l2": 1,
+        "r0": 0.5, "r1": 0.5, "r2": 0.5,
+        "m1": 1, "m2": 1, "m3": 1,
+        "Ix1": 1, "Iy1": 1, "Iz1": 1,
+        "Ix2": 1, "Iy2": 1, "Iz2": 1,
+        "Ix3": 1, "Iy3": 1, "Iz3": 1,
+        "g": 9.81
+    }
+    l0, l1, l2 = C["l0"], C["l1"], C["l2"]
+    r0, r1, r2 = C["r0"], C["r1"], C["r2"]
+    m1, m2, m3 = C["m1"], C["m2"], C["m3"] 
+    Ix1, Iy1, Iz1 = C["Ix1"], C["Iy1"], C["Iz1"]
+    Ix2, Iy2, Iz2 = C["Ix2"], C["Iy2"], C["Iz2"]
+    Ix3, Iy3, Iz3 = C["Ix3"], C["Iy3"], C["Iz3"]
+    g = C["g"]
 
 # ------------------------------------------------------------------------------
 # Twists 
@@ -168,7 +173,7 @@ for i in range(M.shape[0]):
 # Coriolis Matrix 
 thetas = [theta1, theta2, theta3]
 dthetas = [dtheta1, dtheta2, dtheta3]
-C = ComputeCoriollisMatrix(M, thetas, dthetas)
+C = ComputeCoriollisMatrix(M, thetas, dthetas, False)
 
 print(f"\n#", "-"*50)
 print("\nCoriollis Matrix C\n")
@@ -216,50 +221,89 @@ for i in range(len(m)):
 
 # ------------------------------------------------------------------------------
 # Forward Dynamics
-print(f"\n#", "-"*50)
-print(f"\nForward dynamics")
+def IntAcc(t, X, ax):
+    x, dx = X
+    return dx, ax
 
-# Computing initial configuration
-eps = 1e-3
-q = Matrix([0.0, pi/2, 0.0])
-q_d = Matrix([0.0, 0.0, 0.0])
+if forward_dynamics:
+    print(f"\n#", "-"*50)
+    print(f"\nForward dynamics")
 
-dq = Matrix([0.01, 0.01, 0.01])
-ddq = Matrix([0.01, 0.01, 0.01])
-
-# subsitute with current values
-Minv = M.inv()
-Mtinv = Minv.subs({theta2 : pi/2, theta3: 0.01})
-Mt = M.subs({theta2 : pi/2, theta3: 0.01})
-Ct = C.subs({theta2 : pi/2, theta3: 0.0, 
-             dtheta2: 1.0, dtheta3: 1.0, dtheta1: 1.0})
-Nt = N.subs({theta2 : pi/2, theta3: 0.0})
-tau = Mt * ddq + Ct * dq + Nt 
-
-err = q - q_d
-e = sqrt(err.dot(err))
-max_iter = 10
-i = 0
-hstep = 0.0001
-while e > eps and max_iter > i:
-    i += 1
+    # Computing initial configuration
+    eps = 1e-3
     
-    # compute acceleration components
-    ddqt = Mtinv * (tau - Ct * dq - Nt)
-    dqt = hstep * (ddq + ddqt) / 2
-    q = hstep * (dq + dqt) / 2
-    ddq = ddqt
-    dq = dqt
+    q_d = Matrix([0.0, 0.0, 0.0])
+    q0 = Matrix([0.0, pi/2, 0.0])
+    q = Matrix([0.0, pi/2, 0.0])
+    
+    dq0 = Matrix([0.0, -0.01, 0.0])
+    dq = Matrix([0.0, -0.01, 0.0])
+    ddq = Matrix([0.0, -0.01, 0.0])
+    
+    # subsitute with current values
+    Minv = M.inv()
+    Mtinv = Minv.subs({theta2 : q0[1], theta3: q0[2]})
+    Mt = M.subs({theta2 : q0[1], theta3: q0[2]})
+    Ct = C.subs({theta2 : q0[1], theta3: q0[2], dtheta2: dq[1], dtheta3: dq[2], 
+                 dtheta1: dq[0]})
+    Nt = N.subs({theta2 : q0[1], theta3: q0[2]})
+    tau = Mt * ddq + Ct * dq + Nt 
+
     err = q - q_d
     e = sqrt(err.dot(err))
+    max_iter = 1000
+    i = 0
+    t0, dt = 0, 0.05
+    Q = [[q[0], q[1], q[2]]]
+    T = [t0]
+    while e > eps and max_iter > i:
+        i += 1
+        
+        t = [t0, t0 + dt]
+        t0 += dt
+        T.append(t0)
+
+        # compute acceleration components
+        ddq = Mtinv * (tau - Ct * dq - Nt)
     
-    # substitute with current values
-    Mtinv = Minv.subs({theta2 : q[1], theta3: q[2]})
-    Mt = M.subs({theta2 :q[1], theta3: q[2]})
-    Ct = C.subs({theta2: q[1], theta3: q[2], 
-                 dtheta1: dq[0], dtheta2: dq[1], dtheta3: dq[2]})
-    Nt = N.subs({theta2 : q[1], theta3: q[2]})
-    tau = Mt * ddq + Ct * dq + Nt 
-    
-    pprint(e)
-    pprint(q)
+        # numerical integration
+        sol = solve_ivp(IntAcc, t, [q[0], dq[0]], args=[ddq[0]])
+        q[0], dq[0] = sol.y[0, -1], sol.y[1, -1]
+        sol = solve_ivp(IntAcc, t, [q[1], dq[1]], args=[ddq[1]])
+        q[1], dq[1] = sol.y[0, -1], sol.y[1, -1]
+        sol = solve_ivp(IntAcc, t, [q[2], dq[2]], args=[ddq[2]])
+        q[2], dq[2] = sol.y[0, -1], sol.y[1, -1]
+        Q.append([q[0], q[1], q[2]])
+        
+        pprint(q)
+        # dq = dq0 + ddq * t
+        # q = q0 + dq0 * t + 0.5 * ddq * t ** 2
+        
+        err = q - q_d
+        e = sqrt(err.dot(err))
+        print(f"iter: {i} error: {e}")
+        
+        # substitute with current values
+        Mtinv = Minv.subs({theta2 : q[1], theta3: q[2]})
+        Mt = M.subs({theta2 :q[1], theta3: q[2]})
+        Ct = C.subs({theta2: q[1], theta3: q[2], 
+                    dtheta1: dq[0], dtheta2: dq[1], dtheta3: dq[2]})
+        Nt = N.subs({theta2 : q[1], theta3: q[2]})
+        tau = Mt * ddq + Ct * dq + Nt 
+        
+    # Plot
+    Q = np.asarray(Q)
+    fig, axs = plt.subplots(3, sharex=True)
+    fig.suptitle('Joint angles over time')
+    axs[0].plot(T, Q[:, 0])
+    axs[0].set_title('theta0')
+    axs[0].set_ylabel('angle (rad)')
+    axs[1].plot(T, Q[:, 1])
+    axs[1].set_title('theta1')
+    axs[1].set_ylabel('angle (rad)')
+    axs[2].plot(T, Q[:, 2])
+    axs[2].set_title('theta2')
+    axs[2].set_ylabel('angle (rad)')
+    axs[2].set_xlabel('time')
+    plt.show()
+    plt.close()
