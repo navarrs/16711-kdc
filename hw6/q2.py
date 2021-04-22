@@ -96,6 +96,7 @@ k = len(P_list) - 2
 y_rts = np.zeros_like(ydata)
 while k > 0:
     # equations to compute 
+    #   k < n
     #   x_{k|n} = x_{k|k} + C_{k} (x_{k+1|n} - x_{k+1|k})
     #   P_{k|n} = P_{k|k} + C_{k} (P_{k+1|n} - P_{k+1|k}) C_{k}^{T}
     #     C_{k} = P_{k|k} B^{T} P_{k+1|k}^{-1}
@@ -114,7 +115,7 @@ ax.plot3D(ydata[:, 0], ydata[:, 1], ydata[:, 2],
 ax.plot3D(y_kf[:, 0], y_kf[:, 1], y_kf[:, 2], 
           marker='+', markersize=3, color='red', label='y_kf')
 ax.plot3D(y_rts[:, 0], y_rts[:, 1], y_rts[:, 2], 
-          marker='+', markersize=3, color='red', label='y_rts')
+          marker='v', markersize=3, color='green', label='y_rts')
 ax.legend()
 ax.set_xlabel('X Label')
 ax.set_ylabel('Y Label')
